@@ -122,7 +122,7 @@ def process_serve_img_mammo():
    idx = int(prfxsplt[2])
 
    # S3 Get File
-   conn = S3Connection('AKIAIQM6VK2F7MGYZCBQ', 'ElGKOoxtpKzlDRXsuM11hfDu4EPn6FiAttBQdBaG')
+   conn = S3Connection('', '')
    bkt = conn.get_bucket('qad_imgs')
    k = Key(bkt)
    mykey = prefix+'-'+str(nfiles)+'-'+'0' # replace the '0' with str(index) if we deal with more than one file (see MRI); nfiles shoulder be '1'
