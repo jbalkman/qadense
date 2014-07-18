@@ -54,6 +54,7 @@
 		doc_leave_timer,
 		stop_loop = false,
 		files_count = 0,
+                file_prefix = '',
 		files;
 
 	$.fn.filedrop = function(options) {
@@ -71,6 +72,7 @@
 			return false;
 		}
 		
+	    
 		files_count = files.length;
 		upload();
 		e.preventDefault();
@@ -135,9 +137,7 @@
 			}
 		}
 	}
-    
-    
-    
+        
 	function upload() {
 		stop_loop = false;
 		if (!files) {
@@ -151,6 +151,9 @@
 		    opts.error(errors[1]);
 		    return false;
 		}
+
+	        // file_prefix is determined by time and represents a unique prefix to a stack; should be redetermined on each drag & drop
+	        file_prefix = new Date().getTime();
 
 		for (var i=0; i<files_count; i++) {
 			if (stop_loop) return false;
@@ -192,12 +195,16 @@
 				start_time = new Date().getTime(),
 				boundary = '------multipartformboundary' + (new Date).getTime(),
 				builder;
-				
-			newName = rename(file.name);
+		    
+		        newName = rename(file.name, e.target.index);
+    		        //alert("Index: "+e.target.index);
+     		        //alert("Result: "+e.target.result);
 			if (typeof newName === "string") {
-				builder = getBuilder(newName, e.target.result, boundary);
+			    builder = getBuilder(newName, e.target.result, boundary);
+			    //alert("New Name: "+newName);
 			} else {
-				builder = getBuilder(file.name, e.target.result, boundary);
+			    builder = getBuilder(file.name, e.target.result, boundary);
+			    //alert("File Name: "+file.name);
 			}
 			
 			upload.index = index;
@@ -241,10 +248,36 @@
 		return undefined;
 	}
     
-	function rename(name) {
-		return opts.rename(name);
-	}
+    // Override this function to encode the number of files and file index into the filename while preserving the extension
+    function rename(name, idx) {
+	var nn;
+
+	// Replace file name with current time + file count + index; keep the extension the same
+	fnamesplit = name.split(".");
+	nn = file_prefix+"-"+files_count+"-"+idx+"."+fnamesplit[fnamesplit.length - 1];
+
+	// Keeps the original file name
+	/*fnamesplit = name.split(".");
+	if (fnamesplit.length > 2) {
+	    nn = fnamesplit.slice(0,fnamesplit.length - 2).concat("-"+file_prefix+"-"+files_count+"-"+idx+"."+fnamesplit[fnamesplit.length - 1]);
+	} else {
+	    nn = fnamesplit[0].concat("-"+file_prefix+"-"+files_count+"-"+idx+"."+fnamesplit[fnamesplit.length - 1]);
+	}*/
+
+	// Implementation passing file_count and index and burden on the server side to create unique file name; didn't work b/c server couldn't remember base name between requests
+	/*fnamesplit = name.split(".");
+	if (fnamesplit.length > 2) {
+	    nn = fnamesplit.slice(0,fnamesplit.length - 2).concat("/"+files_count+"/"+idx+"."+fnamesplit[fnamesplit.length - 1]);
+	} else {
+	    nn = fnamesplit[0].concat("/"+files_count+"/"+idx+"."+fnamesplit[fnamesplit.length - 1]);
+	}*/
+
+	return nn;
+	//return opts.rename(name); // this is the old function
+    }
 	
+
+
 	function beforeEach(file) {
 		return opts.beforeEach(file);
 	}

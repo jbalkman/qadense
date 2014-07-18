@@ -21,6 +21,7 @@
 
 <script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/2.0.2/jquery.min.js"></script>
 <script type="text/javascript" src="static/js/jquery.filedrop.js"></script>
+<script type="text/javascript" src="static/js/jquery.mooscan.js"></script>
 <script type="text/javascript" src="static/js/display.js"></script>
 <script type="text/javascript" src="static/js/upload.js"></script>
 <script type="text/javascript" src="static/js/submit.js"></script>
@@ -163,7 +164,11 @@
 	</table>
       </div>
     </div>
-    <div id="canvas-container">
+  </div>
+  
+  <div class="container marketing">
+    <div class="row">
+      <div class="col-md-8 col-md-offset-2">
       <canvas id="my-canvas"></canvas>
     </div>
   </div>
@@ -182,13 +187,12 @@
       </div>
       
       <div id="dropbox-container">
-	<h3>Drop any DICOM or TIFF mammogram file below and click the Analyze button.</h3>
+	<h3>Drop any DICOM or TIFF mammogram or MRI stack below and click the Analyze button.</h3>
 	<div id="dropbox">
 	  <span class="message">Drop images here to upload.</span>
 	</div>      
-	<p><a class="btn btn-lg btn-primary" id="processButton" role="button">ANALYZE MAMMOGRAM</a></p>
-      </div>
-      
+	    <p><a class="btn btn-lg btn-primary" id="processButtonMammo" role="button">ANALYZE MAMMOGRAM</a>
+	    <a class="btn btn-lg btn-primary" id="processButtonMRI" role="button">ANALYZE MRI</a></p>
     </div>
 
     <!-- /END THE FEATURETTES -->
