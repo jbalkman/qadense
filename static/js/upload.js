@@ -3,9 +3,6 @@ $(function(){
     var dropbox = $('#dropbox'),
     message = $('.message', dropbox);
     curr_file = []; // set global variable to null and flag error if process button is pressed prior to uploading a mammogram
- 
-    //var canvas = document.getElementById("myCanvas");
-    //var context = canvas.getContext("2d");
 
     dropbox.filedrop({
 	paramname: 'file',
@@ -25,9 +22,7 @@ $(function(){
 	    
 	    curr_file = response.file;
 	    
-	    alert("My curr file = "+curr_file);
-
-	    //alert("Current file after drop: "+curr_file);
+	    //alert("My curr file = "+curr_file);
 	},
 	
     	error: function(err, file) {

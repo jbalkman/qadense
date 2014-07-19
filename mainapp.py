@@ -36,7 +36,6 @@ from skimage.util import img_as_ubyte
 
 # Globals
 DEBUG = False
-OUT_FILE = open('./log.out', 'w+')
 MAX_DIST = 512 # arbritrary
 BLKSZ = 101
 
@@ -49,8 +48,10 @@ TIFF_EXTENSIONS = ['tif', 'tiff']
 DICOM_EXTENSIONS = ['dcm', 'dicom']
 PNG_EXTENSIONS = ['png']
 JPG_EXTENSIONS = ['jpg', 'jpeg']
-DEBUG = True
+DEBUG = False
 FONT_PATH = 'static/fonts/'
+ACCESS_KEY = ''
+SECRET_KEY = ''
 
 @app.route('/')
 def hello_world():
@@ -76,18 +77,14 @@ def process_serve_img_mri():
    nfiles = int(prfxsplt[1])
    idx = int(prfxsplt[2])
 
-   conn = S3Connection('AKIAIQM6VK2F7MGYZCBQ', 'ElGKOoxtpKzlDRXsuM11hfDu4EPn6FiAttBQdBaG')
+   conn = S3Connection(ACCESS_KEY, SECRET_KEY)
    bkt = conn.get_bucket('qad_imgs')
    
    k = Key(bkt)
    try:
       for x in range(0,nfiles):
-         #print x, nfiles
          mykey = prefix+'-'+str(nfiles)+'-'+str(x)
-         #print "KEY OUT: "+mykey
          k.key = mykey
-         #print "SIZE OUT: "+str(k.size)
-         #print "TYPE OUT: "+k.content_type
 
          # NEW: Process file here...
          fout = cStringIO.StringIO()
@@ -122,7 +119,7 @@ def process_serve_img_mammo():
    idx = int(prfxsplt[2])
 
    # S3 Get File
-   conn = S3Connection('AKIAIQM6VK2F7MGYZCBQ', 'ElGKOoxtpKzlDRXsuM11hfDu4EPn6FiAttBQdBaG')
+   conn = S3Connection(ACCESS_KEY, SECRET_KEY)
    bkt = conn.get_bucket('qad_imgs')
    k = Key(bkt)
    mykey = prefix+'-'+str(nfiles)+'-'+'0' # replace the '0' with str(index) if we deal with more than one file (see MRI); nfiles shoulder be '1'
@@ -137,20 +134,20 @@ def process_serve_img_mammo():
    v = None
    data_encode = None
 
-   # try:
-   fout = cStringIO.StringIO()
-   k.get_contents_to_file(fout)
-   a, d, ca, cv, s, v = processMammoFile(fout,k) # returns density, density category, side, and view 
-   data = k.get_contents_as_string()
+   try:
+      fout = cStringIO.StringIO()
+      k.get_contents_to_file(fout)
+      a, d, ca, cv, s, v = processMammoFile(fout,k) # returns density, density category, side, and view 
+      data = k.get_contents_as_string()
  
-   print a, d, ca, cv, s, v
+      print a, d, ca, cv, s, v
    
-   data_encode = data.encode("base64")
-   imgarr.append(k.generate_url(3600))
+      data_encode = data.encode("base64")
+      imgarr.append(k.generate_url(3600))
    
-   result = 1
-   #except:
-   #   result = 0
+      result = 1
+   except:
+      result = 0
 
    return jsonify({"success":result, "imagefile":data_encode, "imgarr":imgarr, "area_d":a, "volumetric_d":d, "dcat_a":ca, "dcat_v":cv, "side":s, "view":v})
 
@@ -215,24 +212,13 @@ def upload():
 
    if request.method == 'POST':
       file = request.files['file']
-      #print request
-      print request.files
-      print file.filename
       if file and allowed_file(file.filename):
          now = datetime.now()
 
-         # Old naming and storage to local file system
-         '''ext = file.filename.rsplit('.', 1)[1]
-         filename_noext = os.path.join(app.config['UPLOAD_FOLDER'], "%s" % (now.strftime("%Y-%m-%d-%H-%M-%S-%f")))
-         filename_ext = filename_noext+'.'+ext
-         file.save(filename_ext)
-
-         return jsonify({"success":True, "file": filename_ext}) # passes to upload.js, function uploadFinished'''
-
-         # New naming and storage to S3 database
+         # Naming and storage to S3 database
          prefix = file.filename.rsplit('.', 1)[0]
 
-         conn = S3Connection('AKIAIQM6VK2F7MGYZCBQ', 'ElGKOoxtpKzlDRXsuM11hfDu4EPn6FiAttBQdBaG')
+         conn = S3Connection(ACCESS_KEY, SECRET_KEY)
          bkt = conn.get_bucket('qad_imgs')
          k = Key(bkt)
          k.key = prefix
@@ -251,10 +237,6 @@ def upload():
             k.set_contents_from_file(pil_dcm_str, headers={"Content-Type":"image/tiff"})
          else:
             k.set_contents_from_file(file) # don't suspect that this will work
-
-         '''print "KEY IN: "+prefix
-         print "SIZE IN: "+str(k.size)
-         print "TYPE IN: "+k.content_type'''
 
          return jsonify({"success":True, "file": file.filename}) # passes to upload.js, function uploadFinished
 
@@ -414,11 +396,15 @@ def processSliceMRI(f,k): # pass the key so we can replace the original image wi
    # Plot a 4x4
    pil_imarray = Image.fromarray(imarray)
    pil_thresh = Image.fromarray(thresh)
-   pil_fgt_thresh_l = Image.fromarray(fgt_thresh_crop_l)
-   pil_fgt_thresh_r = Image.fromarray(fgt_thresh_crop_r)
+   copyarr = fgt_thresh_crop_l.copy() # need to copy array b/c of some obscure ubuntu/PIL issue: http://stackoverflow.com/questions/10854903/what-is-causing-dimension-dependent-attributeerror-in-pil-fromarray-function
+   pil_fgt_thresh_l = Image.fromarray(copyarr)
+   copyarr = fgt_thresh_crop_r.copy() # see above
+   pil_fgt_thresh_r = Image.fromarray(copyarr)
    pil_otsu = Image.fromarray(fgt_thresh)
-   pil_segmented_l = Image.fromarray(mask_crop_l)
-   pil_segmented_r = Image.fromarray(mask_crop_r)
+   copyarr = mask_crop_l.copy() # see above
+   pil_segmented_l = Image.fromarray(copyarr)
+   copyarr = mask_crop_r.copy() # see above
+   pil_segmented_r = Image.fromarray(copyarr)
    pil_markup = Image.fromarray(contoursarray)
 
    plt.figure(figsize=(18,18))
@@ -435,9 +421,6 @@ def processSliceMRI(f,k): # pass the key so we can replace the original image wi
    plt.subplot(2,2,4),plt.imshow(pil_fgt_thresh_l, 'gray')
    plt.title('Left Fibroglandular Segmentation\n14% Calculated Volumetric Density (all slices)',fontsize=20)
    plt.tight_layout() # didn't work...
-
-   #plt.subplots_adjust(left=0.1, bottom=0.1, right=0.1, top=0.1, wspace=0.1, hspace=0.1) 
-   #plt.show()
 
    imgout = cStringIO.StringIO()
    plt.savefig(imgout, format='png') # can't save as a JPG; use PNG and PIL to convert to JPG if necessary
