@@ -1,5 +1,4 @@
 $(function(){
-    
     var dropbox = $('#dropbox'),
     message = $('.message', dropbox);
     curr_file = []; // set global variable to null and flag error if process button is pressed prior to uploading a mammogram

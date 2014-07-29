@@ -101,3 +101,19 @@ body{
 #dropbox .preview.done .progress{
 	width: 100% !important;
 }
+
+#predownload{
+	position:absolute;
+	border:3px solid #ccc;
+	background:#333;
+	padding:5px;
+	display:none;
+	color:#fff;
+	box-shadow: 4px 4px 3px rgba(103, 115, 130, 1);
+}
+
+
+img {
+	border:0px;
+	box-shadow: 2px 2px 3px #555562;
+}

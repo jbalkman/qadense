@@ -9,10 +9,12 @@ import cStringIO
 from datetime import datetime
 from flask import Flask, render_template, jsonify, redirect, url_for, request, send_file
 
-# Image Processing
+# Image Processingx
 import math
 import numpy as np
 import cv2, cv
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import mahotas
 import dicom
@@ -150,62 +152,6 @@ def process_serve_img_mammo():
       result = 0
 
    return jsonify({"success":result, "imagefile":data_encode, "imgarr":imgarr, "area_d":a, "volumetric_d":d, "dcat_a":ca, "dcat_v":cv, "side":s, "view":v})
-
-
-@app.route('/process_serve_GOLDEN', methods=['GET']) # remove golden to retain functionality
-def process_serve_img_GOLDEN():
-   imgfile = request.args.get('imgfile')
-   print "Process/Serving Image: "+imgfile
-   fnamesplit = imgfile.rsplit('.')
-   imgprefix = fnamesplit[0]
-   ext = fnamesplit[1]
-
-   # Initialize submitted variables
-   a = None
-   d = None
-   ca  = None
-   cv  = None
-   s = None
-   v = None
-   data_encode = None
-
-   try:
-      a, d, ca, cv, s, v = processMammoFile(imgfile) # returns density, density category, side, and view
-      print a, d, ca, cv, s, v
-      result = 1
-   except:
-      result = 0
-   
-   try:
-      with open(imgprefix+"-out.jpg", "rb") as f: # the imgfile has been resaved as the results from the processing above, so there is no need to change the file
-         data = f.read()
-         data_encode = data.encode("base64")
-         print "Removing output file "+imgprefix+"-out.jpg"
-         os.remove(imgprefix+"-out.jpg")
-   except:
-      result = 0
-
-   # Clean-up upload files so nothing is left on the server
-   print "Removing files for "+imgprefix+"."+ext
-   try: 
-      os.remove(imgprefix+"."+ext)
-   except:
-      print "Unable to remove files for "+imgprefix+"."+ext
-
-   # Remove histogram file
-   try:
-      os.remove(imgprefix+'-hist.jpg')
-   except:
-      print "Unable to remove histogram file"
-         
-   # Since it was required to convert a dcm file to a tif we need to remove the latter as well
-   if 'dcm' in ext:
-      try:
-         os.remove(imgprefix+'.tif')
-      except:
-         print "Unable to remove files for "+imgprefix+"."+ext
-
-   return jsonify({"success":result, "imagefile":data_encode, "area_d":a, "volumetric_d":d, "dcat_a":ca, "dcat_v":cv, "side":s, "view":v})
 
 @app.route('/upload', methods=['POST'])
 def upload():

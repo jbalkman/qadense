@@ -58,6 +58,7 @@ $(function () {
 		$('#loading-indicator').hide();
 		$('#dropbox-container').show();
 		$('#results-container').show();
+		$('#download-container').show();
 		removeImages();
 	    }
 	});
@@ -89,6 +90,7 @@ $(function () {
 		$('#loading-indicator').hide();
 		$('#dropbox-container').show();
 		$('#results-container').show();
+		$('#download-container').show();
 		removeImages();
 	    }
 	});
@@ -104,7 +106,7 @@ $(function () {
 	    $('#loading-indicator').show();
 	    $('#dropbox-container').hide();
 	    $('#results-container').hide();
-	    
+	    $('#download-container').hide();	    
 	    getImagesMammo();
 	}
     }); 
@@ -119,7 +121,7 @@ $(function () {
 	    $('#loading-indicator').show();
 	    $('#dropbox-container').hide();
 	    $('#results-container').hide();
-	    
+	    $('#download-container').hide();	    
 	    getImagesMRI();
 	}
     }); 
