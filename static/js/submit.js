@@ -82,7 +82,12 @@ $(function () {
 			imgarr = resp.imgarr;
 			initCanvas();
 		    }
-
+		    $("#AREA_D").html(resp.area_d);
+		    $("#VOL_D").html(resp.volumetric_d);
+		    $("#DCAT_A").html(resp.dcat_a);
+		    $("#DCAT_V").html(resp.dcat_v);
+		    $("#SIDE").html(resp.side);
+		    $("#VIEW").html(resp.view);
 		} else {
 		    alert("Sorry, there was an error processing one of the submitted MRI slices.");
 		}

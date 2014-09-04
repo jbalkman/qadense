@@ -68,6 +68,14 @@ def process_serve_img_mri():
    ifile = None
    imgarr = []
 
+   # Initialize submitted variables
+   total_seg = 0
+   total_fat = 0
+   total_seg_l = 0
+   total_fat_l = 0
+   total_seg_r = 0
+   total_fat_r = 0
+
    imgfile = request.args.get('imgfile')
    print "Process/Serving Image: "+imgfile
    fnamesplit = imgfile.rsplit('.', 1)
@@ -91,7 +99,21 @@ def process_serve_img_mri():
          # NEW: Process file here...
          fout = cStringIO.StringIO()
          k.get_contents_to_file(fout)
-         d, v = processSliceMRI(fout,k)
+         #d, v = processSliceMRI(fout,k)
+         print "before process MRI file"
+         s, f, sl, fl, sr, fr = processMRIFile(fout,k)
+         print "after process MRI file"
+
+         # Calculate Totals
+         total_seg = total_seg + s
+         total_fat = total_fat + f
+         
+         total_seg_l = total_seg_l + sl
+         total_fat_l = total_fat_l + fl
+         
+         total_seg_r = total_seg_r + sr
+         total_fat_r = total_fat_r + fr
+
          data = k.get_contents_as_string()
          #k.delete() # putting the delete here causes premature loss of the image; need to find somewhere else to do it probably performed via outside function when called from javascript
          data_encode = data.encode("base64")
@@ -100,7 +122,12 @@ def process_serve_img_mri():
    except:
       result = 0
 
-   return jsonify({"success":result,"imagefile":data_encode,"imgarr":imgarr})
+   bilateral_density = (total_seg - total_fat)*100//total_seg
+   left_density = (total_seg_l - total_fat_l)*100//total_seg_l
+   right_density = (total_seg_r - total_fat_r)*100//total_seg_r
+   volstr = 'L = '+str(left_density)+', R ='+str(right_density)
+
+   return jsonify({"success":result,"imagefile":data_encode,"imgarr":imgarr, "area_d":'N/A', "volumetric_d":volstr, "dcat_a":'N/A', "dcat_v":'N/A', "side":'Bilateral', "view":'Axial'})
 
 @app.route('/process_serve_mammo', methods=['GET']) # remove golden to retain functionality
 def process_serve_img_mammo():
@@ -200,6 +227,190 @@ def istiff(filename):
 
 def isdicom(filename):
     return '.' in filename and filename.rsplit('.', 1)[1] in DICOM_EXTENSIONS
+
+def processMRIFile(f, k):
+   density = 1
+   volume = 1
+   
+   # Read the file into an array
+   array = np.frombuffer(f.getvalue(), dtype='uint16')
+   origimg = cv2.imdecode(array, cv2.CV_LOAD_IMAGE_GRAYSCALE)
+   
+   # Chop off the bottom of the image b/c there is often noncontributory artifact; then make numpy arrays
+   img = origimg[:,30:482]
+   imarray = np.array(img)
+
+   hist_orig, bins_orig = np.histogram(imarray, bins=255, normed=False, range=(10, 255))
+   
+   imarraymarkup = imarray
+   maskarray = np.zeros_like(imarray)
+   contoursarray = np.zeros_like(imarray)
+   onesarray = np.ones_like(imarray)
+   
+   # Option for printing entire arrays
+   #np.set_printoptions(threshold='nan')
+   
+   # THRESHOLDING FOR BREAST SEGMENTATION
+   
+   #---------------------#
+   #      THRESHOLD      #
+   #---------------------#
+   ret,thresh = cv2.threshold(imarray,10,255,cv2.THRESH_BINARY) # threshold out the background by arbitrary number
+   
+   #---------------------#
+   #    GET CONTOURS     #
+   #---------------------#
+   contours, hierarchy = cv2.findContours(thresh,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
+   
+   biggest_contour = []
+   for n, contour in enumerate(contours):
+      if len(contour) > len(biggest_contour):
+         biggest_contour = contour
+         
+   # Fill in the biggest contour
+   cv2.fillPoly(maskarray, pts = [biggest_contour], color=cv.RGB(255,255,255))
+         
+   # Use the mask array to crop the original
+   imcrop_orig = cv2.bitwise_and(imarray, maskarray)
+
+   # Adaptive Threshold
+   fgt_thresh = cv2.adaptiveThreshold(imcrop_orig,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY,BLKSZ, 0)
+   #fgt_thresh = cv2.adaptiveThreshold(imcrop_orig,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY,101, 0)
+
+   # Absolute Val Threshold
+   #ret,thresh = cv2.threshold(imarray,100,255,cv2.THRESH_BINARY) # threshold out the background by arbitrary number
+
+   # Calculate R/L sidedness using centroid
+   #M = cv2.moments(biggest_contour)
+   M = cv2.moments(maskarray)
+   cx = int(M['m10']/M['m00'])
+   cy = int(M['m01']/M['m00'])
+   
+   # Remove the aberrant portion of the contour below the center of mass
+   biggest_contour = biggest_contour[biggest_contour[:,0,1] < cy] # wow indexing is nice for ndarrays
+
+   # Draw the biggest contour on an array map
+   cv2.drawContours(contoursarray,biggest_contour,-1,cv.RGB(255,255,255),5)            
+
+   # Plot the center of mass
+   cv2.circle(contoursarray,(cx,cy),15,[255,0,255],-1)            
+   
+   #---------------------#
+   #    SEGMENTATION     #
+   #---------------------#
+   
+   # Grab a short segment of the big contour near the centroid
+   short_segment = biggest_contour[biggest_contour[:,0,0] < (cx + 20)]
+   short_segment = short_segment[short_segment[:,0,0] > (cx - 20)]
+   
+   dft_cntr = (cx, cy)
+   
+   pdist = MAX_DIST
+   cdist = 0
+   
+   for i in range(short_segment.shape[0]):
+      cdist = abs(cx - short_segment[i,0,0])
+      if cdist < pdist: # test for minimum distance from the centroid
+         dft_cntr = (short_segment[i,0,0],short_segment[i,0,1])
+         pdist = cdist
+         
+   if dft_cntr:
+      cv2.circle(contoursarray,dft_cntr,10,cv.RGB(255,0,255),-1)
+            
+   # Draw thick black contour to eliminate the skin and nipple from the image
+   cv2.drawContours(fgt_thresh,biggest_contour,-1,(0,0,0),5) # 
+   cv2.drawContours(maskarray,biggest_contour,-1,(0,0,0),5) #
+
+   #---------------------#
+   #      CROPPING       #
+   #---------------------#
+
+   # Crop the arrays based on segmentation; this may have to change with orientation; just switch the colons to the opposite sides
+   fgt_thresh_crop = fgt_thresh[:dft_cntr[1],:]
+   mask_crop = maskarray[:dft_cntr[1],:]
+   
+   # Isolate the breasts; this will have to be changed with orientation
+   fgt_thresh_crop_r = fgt_thresh[:dft_cntr[1],:dft_cntr[0]]
+   fgt_thresh_crop_l = fgt_thresh[:dft_cntr[1],dft_cntr[0]:]
+   
+   mask_crop_r = maskarray[:dft_cntr[1],:dft_cntr[0]]
+   mask_crop_l = maskarray[:dft_cntr[1],dft_cntr[0]:]
+   
+   # Find the proportions of fibroglandular tissue
+   segmented = mask_crop > 0
+   segmented = segmented.astype(int)
+   segmented_sum = segmented.sum()
+   
+   fat = fgt_thresh_crop > 0
+   fat = fat.astype(int)
+   fat_sum = fat.sum()
+   
+   # Perform calculations for each breast
+   segmented_l = mask_crop_l > 0
+   segmented_l = segmented_l.astype(int)
+   segmented_l_sum = segmented_l.sum()
+   
+   fat_l = fgt_thresh_crop_l > 0
+   fat_l = fat_l.astype(int)
+   fat_l_sum = fat_l.sum()
+   
+   segmented_r = mask_crop_r > 0
+   segmented_r = segmented_r.astype(int)
+   segmented_r_sum = segmented_r.sum()
+   
+   fat_r = fgt_thresh_crop_r > 0
+   fat_r = fat_r.astype(int)
+   fat_r_sum = fat_r.sum()
+   
+   # Total tissue measured minus fat tissue over the total tissue = fibroglandular percent
+   tfgt = (segmented_sum - fat_sum)*100//segmented_sum
+   lfgt = (segmented_l_sum - fat_l_sum)*100//segmented_l_sum
+   rfgt = (segmented_r_sum - fat_r_sum)*100//segmented_r_sum
+   print "Percentage Fibrogalandular Tissue: ", tfgt
+   print "Percentage Left Fibrogalandular Tissue: ", lfgt
+   print "Percentage Right Fibrogalandular Tissue: ", rfgt
+   
+   # Plot a 4x4
+   pil_imarray = Image.fromarray(imarray)
+   pil_thresh = Image.fromarray(thresh)
+   pil_fgt_thresh_l = Image.fromarray(fgt_thresh_crop_l)
+   pil_fgt_thresh_r = Image.fromarray(fgt_thresh_crop_r)
+   pil_otsu = Image.fromarray(fgt_thresh)
+   pil_segmented_l = Image.fromarray(mask_crop_l)
+   pil_segmented_r = Image.fromarray(mask_crop_r)
+   pil_markup = Image.fromarray(contoursarray)
+   
+   # Paste Results
+   pil_backdrop = Image.new('RGB', (587,587), "white")
+   pil_backdrop.paste(pil_imarray.resize((256,256),Image.ANTIALIAS),(25,25))
+   pil_backdrop.paste(pil_markup.resize((256,256),Image.ANTIALIAS),(306,25))
+   
+   w, h = pil_fgt_thresh_r.size
+   W = 256*w//h
+   pil_backdrop.paste(pil_fgt_thresh_r.resize((W,256),Image.ANTIALIAS),(25,306))
+   
+   w, h = pil_fgt_thresh_l.size
+   W = 256*w//h
+   pil_backdrop.paste(pil_fgt_thresh_l.resize((W,256),Image.ANTIALIAS),(306,306))
+   
+   # Add Text
+   font = ImageFont.truetype(FONT_PATH+"Arial Black.ttf",14)
+   draw = ImageDraw.Draw(pil_backdrop)
+   draw.text((25,5),"Original Image",0,font=font)
+   draw.text((306,5),"Breast Contour",0,font=font)
+   draw.text((25,286),"Right Breast FGT: "+str(rfgt)+'%',0,font=font)
+   draw.text((306,286),"Left Breast FGT: "+str(lfgt)+'%',0,font=font)
+   
+   # Save File
+   #sfname = fname.rsplit('/',1)[1].split('.',1)[0]
+   #pil_backdrop.save('./OUT/p'+sfname+'.jpg')
+   
+   imgout = cStringIO.StringIO()
+   pil_backdrop.save(imgout, format='png')
+   k.set_contents_from_string(imgout.getvalue())
+   imgout.close()
+   
+   return segmented_sum, fat_sum, segmented_l_sum, fat_l_sum, segmented_r_sum, fat_r_sum
 
 def processSliceMRI(f,k): # pass the key so we can replace the original image with the processed image for display
    density = 1
