@@ -52,8 +52,8 @@ PNG_EXTENSIONS = ['png']
 JPG_EXTENSIONS = ['jpg', 'jpeg']
 DEBUG = False
 FONT_PATH = 'static/fonts/'
-ACCESS_KEY = ''
-SECRET_KEY = ''
+ACCESS_KEY = 'AKIAIQHT5L6NYFM5PW5Q'
+SECRET_KEY = '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'
 
 @app.route('/')
 def hello_world():
@@ -373,11 +373,15 @@ def processMRIFile(f, k):
    # Plot a 4x4
    pil_imarray = Image.fromarray(imarray)
    pil_thresh = Image.fromarray(thresh)
-   pil_fgt_thresh_l = Image.fromarray(fgt_thresh_crop_l)
-   pil_fgt_thresh_r = Image.fromarray(fgt_thresh_crop_r)
+   copyarr = fgt_thresh_crop_l.copy() # need to copy array b/c of some obscure ubuntu/PIL issue: http://stackoverflow.com/questions/10854903/what-is-causing-dimension-dependent-attributeerror-in-pil-fromarray-function
+   pil_fgt_thresh_l = Image.fromarray(copyarr)
+   copyarr = fgt_thresh_crop_r.copy() # see above
+   pil_fgt_thresh_r = Image.fromarray(copyarr)
    pil_otsu = Image.fromarray(fgt_thresh)
-   pil_segmented_l = Image.fromarray(mask_crop_l)
-   pil_segmented_r = Image.fromarray(mask_crop_r)
+   copyarr = mask_crop_l.copy() # see above
+   pil_segmented_l = Image.fromarray(copyarr)
+   copyarr = mask_crop_l.copy() # see above
+   pil_segmented_r = Image.fromarray(copyarr)
    pil_markup = Image.fromarray(contoursarray)
    
    # Paste Results
