@@ -2,23 +2,21 @@
 from __future__ import division
 
 # General
-import os
-import re
-import StringIO
-import cStringIO
+import os, re
+import math, cmath
+import cStringIO, StringIO
 from datetime import datetime
 from flask import Flask, render_template, jsonify, redirect, url_for, request, send_file
 
-# Image Processingx
-import math
+# Image Processing
 import numpy as np
+from numpy.linalg import inv
+import numpy.ma as ma
 import cv2, cv
-import matplotlib
-matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import mahotas
-import dicom
-from matplotlib.figure import Figure
+from skimage.restoration import denoise_tv_chambolle, denoise_bilateral
+from skimage.feature import blob_doh, peak_local_max
 
 # Image Drawing
 from PIL import ImageFont
@@ -29,17 +27,23 @@ from PIL import Image
 from boto.s3.connection import S3Connection
 from boto.s3.key import Key
 
-# Scientific Image Manipulation
+# SciPy
 from scipy import ndimage
-from skimage.morphology import watershed, disk
+from scipy import signal
+from scipy.signal import argrelextrema
+from skimage import morphology
+from skimage.morphology import watershed, disk, ball, cube, opening, octahedron
 from skimage import data
-from skimage.filter import rank, threshold_otsu
+from skimage.filter import rank, threshold_otsu, canny
 from skimage.util import img_as_ubyte
 
-# Globals
+#--------------------------#
+#         GLOBALS          #
+#--------------------------#
+
+LOGFILE = 'pnod_results.txt'
+FONT_PATH = '/Library/Fonts/'
 DEBUG = False
-MAX_DIST = 512 # arbritrary
-BLKSZ = 101
 
 app = Flask(__name__)
 app.config.from_object(__name__)
@@ -52,30 +56,18 @@ PNG_EXTENSIONS = ['png']
 JPG_EXTENSIONS = ['jpg', 'jpeg']
 DEBUG = False
 FONT_PATH = 'static/fonts/'
-ACCESS_KEY = ''
-SECRET_KEY = ''
+ACCESS_KEY = 'AKIAJE4VDF62RFTT3TRA'
+SECRET_KEY = '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'
 
 @app.route('/')
 def hello_world():
    print 'Hello World!'
    return render_template('index.html')
 
-@app.route('/process_serve_mri', methods=['GET'])
-def process_serve_img_mri():
+@app.route('/process_serve_chestct', methods=['GET'])
+def process_serve_chestct():
 
    # Init
-   data_encode = None
-   ifile = None
-   imgarr = []
-
-   # Initialize submitted variables
-   total_seg = 0
-   total_fat = 0
-   total_seg_l = 0
-   total_fat_l = 0
-   total_seg_r = 0
-   total_fat_r = 0
-
    imgfile = request.args.get('imgfile')
    print "Process/Serving Image: "+imgfile
    fnamesplit = imgfile.rsplit('.', 1)
@@ -87,98 +79,36 @@ def process_serve_img_mri():
    nfiles = int(prfxsplt[1])
    idx = int(prfxsplt[2])
 
+   matrix3D = np.array([])
+   initFile = True
+
    conn = S3Connection(ACCESS_KEY, SECRET_KEY)
-   bkt = conn.get_bucket('qad_imgs')
-   
+   bkt = conn.get_bucket('chestcad')
    k = Key(bkt)
+   
+   print prefix, str(nfiles)
    try:
       for x in range(0,nfiles):
          mykey = prefix+'-'+str(nfiles)+'-'+str(x)
          k.key = mykey
-
+         
          # NEW: Process file here...
          fout = cStringIO.StringIO()
          k.get_contents_to_file(fout)
-         #d, v = processSliceMRI(fout,k)
-         print "before process MRI file"
-         s, f, sl, fl, sr, fr = processMRIFile(fout,k)
-         print "after process MRI file"
-
-         # Calculate Totals
-         total_seg = total_seg + s
-         total_fat = total_fat + f
-         
-         total_seg_l = total_seg_l + sl
-         total_fat_l = total_fat_l + fl
-         
-         total_seg_r = total_seg_r + sr
-         total_fat_r = total_fat_r + fr
-
-         data = k.get_contents_as_string()
-         #k.delete() # putting the delete here causes premature loss of the image; need to find somewhere else to do it probably performed via outside function when called from javascript
-         data_encode = data.encode("base64")
-         imgarr.append(k.generate_url(3600))
+         if initFile:
+            matrix3D = readChestCTFile(fout)
+         else:
+            matrix3D = np.concatenate((matrix3D,readChestCTFile(fout)), axis=2)
+         initFile = False
       result = 1
    except:
       result = 0
-
-   bilateral_density = (total_seg - total_fat)*100//total_seg
-   left_density = (total_seg_l - total_fat_l)*100//total_seg_l
-   right_density = (total_seg_r - total_fat_r)*100//total_seg_r
-   volstr = 'L = '+str(left_density)+', R ='+str(right_density)
-
-   return jsonify({"success":result,"imagefile":data_encode,"imgarr":imgarr, "area_d":'N/A', "volumetric_d":volstr, "dcat_a":'N/A', "dcat_v":'N/A', "side":'Bilateral', "view":'Axial'})
-
-@app.route('/process_serve_mammo', methods=['GET']) # remove golden to retain functionality
-def process_serve_img_mammo():
-   # Init
-   data_encode = None
-   ifile = None
-   imgarr = []
-
-   imgfile = request.args.get('imgfile')
-   print "Process/Serving Image: "+imgfile
-   fnamesplit = imgfile.rsplit('.', 1)
-   ext = fnamesplit[1]
-   imgprefix = fnamesplit[0]
-
-   prfxsplt = imgprefix.rsplit('-', 2) 
-   prefix = prfxsplt[0]
-   nfiles = int(prfxsplt[1])
-   idx = int(prfxsplt[2])
-
-   # S3 Get File
-   conn = S3Connection(ACCESS_KEY, SECRET_KEY)
-   bkt = conn.get_bucket('qad_imgs')
-   k = Key(bkt)
-   mykey = prefix+'-'+str(nfiles)+'-'+'0' # replace the '0' with str(index) if we deal with more than one file (see MRI); nfiles shoulder be '1'
-   k.key = mykey
-
-   # Initialize submitted variables
-   a = None
-   d = None
-   ca  = None
-   cv  = None
-   s = None
-   v = None
-   data_encode = None
-
-   try:
-      fout = cStringIO.StringIO()
-      k.get_contents_to_file(fout)
-      a, d, ca, cv, s, v = processMammoFile(fout,k) # returns density, density category, side, and view 
-      data = k.get_contents_as_string()
- 
-      print a, d, ca, cv, s, v
    
-      data_encode = data.encode("base64")
-      imgarr.append(k.generate_url(3600))
+   dimension = matrix3D.shape[0]
+   panel1, panel2, panel3, panel4 = processMatrix(matrix3D, dimension)
+   imgarr, data_encode = printMatrix(panel1, panel2, panel3, panel4, prefix, nfiles)
    
-      result = 1
-   except:
-      result = 0
-
-   return jsonify({"success":result, "imagefile":data_encode, "imgarr":imgarr, "area_d":a, "volumetric_d":d, "dcat_a":ca, "dcat_v":cv, "side":s, "view":v})
+   return jsonify({"success":result,"imagefile":data_encode,"imgarr":imgarr})
 
 @app.route('/upload', methods=['POST'])
 def upload():
@@ -192,7 +122,7 @@ def upload():
          prefix = file.filename.rsplit('.', 1)[0]
 
          conn = S3Connection(ACCESS_KEY, SECRET_KEY)
-         bkt = conn.get_bucket('qad_imgs')
+         bkt = conn.get_bucket('chestcad')
          k = Key(bkt)
          k.key = prefix
          if istiff(file.filename):
@@ -213,6 +143,89 @@ def upload():
 
          return jsonify({"success":True, "file": file.filename}) # passes to upload.js, function uploadFinished
 
+#----------------------------#
+#         FUNCTIONS          #
+#----------------------------#
+
+def get_label_size(a):
+    return 1
+
+def thresh(a, b, max_value, C):
+    return max_value if a > b - C else 0
+
+def block_size(size):
+    block = np.ones((size, size), dtype='d')
+    block[(size - 1 ) / 2, (size - 1 ) / 2] = 0
+    return block
+
+def custom_elem(n):
+    mycustom = np.zeros((n,n,1), dtype=np.int)
+    mycustom[0:n,1:n-1] = 1
+    mycustom[1:n-1,0:n] = 1
+
+    return mycustom
+
+def get_number_neighbours(mask,block):
+    '''returns number of unmasked neighbours of every element within block'''
+    mask = mask / 255.0
+    return signal.convolve2d(mask, block, mode='same', boundary='symm')
+    #return signal.fftconvolve(mask, block, mode='same')
+
+def masked_adaptive_threshold(image,mask,max_value,size,C):
+    '''thresholds only using the unmasked elements'''
+    block = block_size(size)
+    conv = signal.convolve2d(image, block, mode='same', boundary='symm')
+
+    #conv = signal.fftconvolve(image, block, mode='same')
+    mean_conv = conv / get_number_neighbours(mask,block)
+
+    return v_thresh(image, mean_conv, max_value,C)
+
+def motsu(im,iz):
+    th = mahotas.otsu(im, ignore_zeros = iz)
+    int_out, binary_sum, intinv_out, binaryinv_sum = bintoint(im, th)
+
+    return binary_sum, int_out, binaryinv_sum, intinv_out
+
+def bintoint(im, thresh):
+    bool_out = im > thresh
+    binary_out = bool_out.astype('uint8')
+    binaryinv_out = np.logical_not(bool_out).astype('uint8')
+    #opened_out = ndimage.binary_opening(binary_out, structure=np.ones((2,2))).astype('uint8')
+    tot = binary_out.sum()
+    out = binary_out * 255    
+
+    totinv = binaryinv_out.sum()
+    outinv = binaryinv_out * 255    
+
+    return out, tot, outinv, totinv
+
+def lpf(im, s, o, d):
+   # Apply Large Gaussian Filter To Cropped Image
+   blur = ndimage.gaussian_filter(im, (s,s), order=o)/d
+   
+   # Apply Subtraction
+   crpint = im.astype('int')
+   subtracted = np.zeros_like(im)
+   np.clip(crpint-blur, 0, 255, out=subtracted) # the choice between 0 and 1 is based on the OTSU calculation, or whether or not to include all fat pixels
+   return subtracted, blur
+
+# Same as LPF above but don't subtract values below a certain level
+def lpf2(im, s, o, d): 
+   # Apply Large Gaussian Filter To Cropped Image
+   blur = ndimage.gaussian_filter(im, (s,s), order=o)/d
+
+   m = np.average(blur[blur[:,:] > 15])
+
+   low_values_indices = blur < m  # Where values are low
+   blur[low_values_indices] = 0 
+
+   # Apply Subtraction
+   crpint = im.astype('int')
+   subtracted = np.zeros_like(im)
+   np.clip(crpint-blur, 0, 255, out=subtracted) # the choice between 0 and 1 is based on the OTSU calculation, or whether or not to include all fat pixels
+   return subtracted, blur
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1] in ALLOWED_EXTENSIONS
 
@@ -228,624 +241,152 @@ def istiff(filename):
 def isdicom(filename):
     return '.' in filename and filename.rsplit('.', 1)[1] in DICOM_EXTENSIONS
 
-def processMRIFile(f, k):
-   density = 1
-   volume = 1
-   
-   # Read the file into an array
-   array = np.frombuffer(f.getvalue(), dtype='uint16')
-   origimg = cv2.imdecode(array, cv2.CV_LOAD_IMAGE_GRAYSCALE)
-   
-   # Chop off the bottom of the image b/c there is often noncontributory artifact; then make numpy arrays
-   img = origimg[:,30:482]
-   imarray = np.array(img)
+def readChestCTFile(f):
 
-   hist_orig, bins_orig = np.histogram(imarray, bins=255, normed=False, range=(10, 255))
-   
-   imarraymarkup = imarray
-   maskarray = np.zeros_like(imarray)
-   contoursarray = np.zeros_like(imarray)
-   onesarray = np.ones_like(imarray)
-   
-   # Option for printing entire arrays
-   #np.set_printoptions(threshold='nan')
-   
-   # THRESHOLDING FOR BREAST SEGMENTATION
-   
-   #---------------------#
-   #      THRESHOLD      #
-   #---------------------#
-   ret,thresh = cv2.threshold(imarray,10,255,cv2.THRESH_BINARY) # threshold out the background by arbitrary number
-   
-   #---------------------#
-   #    GET CONTOURS     #
-   #---------------------#
-   contours, hierarchy = cv2.findContours(thresh,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
-   
-   biggest_contour = []
-   for n, contour in enumerate(contours):
-      if len(contour) > len(biggest_contour):
-         biggest_contour = contour
-         
-   # Fill in the biggest contour
-   cv2.fillPoly(maskarray, pts = [biggest_contour], color=cv.RGB(255,255,255))
-         
-   # Use the mask array to crop the original
-   imcrop_orig = cv2.bitwise_and(imarray, maskarray)
+    # Read the file into an array
+    array = np.frombuffer(f.getvalue(), dtype='uint8') # or use uint16?
+    img = cv2.imdecode(array, cv2.CV_LOAD_IMAGE_GRAYSCALE)
+    imarray = np.array(img)
 
-   # Adaptive Threshold
-   fgt_thresh = cv2.adaptiveThreshold(imcrop_orig,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY,BLKSZ, 0)
-   #fgt_thresh = cv2.adaptiveThreshold(imcrop_orig,255,cv2.ADAPTIVE_THRESH_GAUSSIAN_C,cv2.THRESH_BINARY,101, 0)
+    imarray = denoise_tv_chambolle(imarray, weight=0.001, multichannel=False)
+    imarray = (imarray*255).astype('uint8')
 
-   # Absolute Val Threshold
-   #ret,thresh = cv2.threshold(imarray,100,255,cv2.THRESH_BINARY) # threshold out the background by arbitrary number
-
-   # Calculate R/L sidedness using centroid
-   #M = cv2.moments(biggest_contour)
-   M = cv2.moments(maskarray)
-   cx = int(M['m10']/M['m00'])
-   cy = int(M['m01']/M['m00'])
-   
-   # Remove the aberrant portion of the contour below the center of mass
-   biggest_contour = biggest_contour[biggest_contour[:,0,1] < cy] # wow indexing is nice for ndarrays
-
-   # Draw the biggest contour on an array map
-   cv2.drawContours(contoursarray,biggest_contour,-1,cv.RGB(255,255,255),5)            
-
-   # Plot the center of mass
-   cv2.circle(contoursarray,(cx,cy),15,[255,0,255],-1)            
-   
-   #---------------------#
-   #    SEGMENTATION     #
-   #---------------------#
-   
-   # Grab a short segment of the big contour near the centroid
-   short_segment = biggest_contour[biggest_contour[:,0,0] < (cx + 20)]
-   short_segment = short_segment[short_segment[:,0,0] > (cx - 20)]
-   
-   dft_cntr = (cx, cy)
-   
-   pdist = MAX_DIST
-   cdist = 0
-   
-   for i in range(short_segment.shape[0]):
-      cdist = abs(cx - short_segment[i,0,0])
-      if cdist < pdist: # test for minimum distance from the centroid
-         dft_cntr = (short_segment[i,0,0],short_segment[i,0,1])
-         pdist = cdist
-         
-   if dft_cntr:
-      cv2.circle(contoursarray,dft_cntr,10,cv.RGB(255,0,255),-1)
-            
-   # Draw thick black contour to eliminate the skin and nipple from the image
-   cv2.drawContours(fgt_thresh,biggest_contour,-1,(0,0,0),5) # 
-   cv2.drawContours(maskarray,biggest_contour,-1,(0,0,0),5) #
-
-   #---------------------#
-   #      CROPPING       #
-   #---------------------#
-
-   # Crop the arrays based on segmentation; this may have to change with orientation; just switch the colons to the opposite sides
-   fgt_thresh_crop = fgt_thresh[:dft_cntr[1],:]
-   mask_crop = maskarray[:dft_cntr[1],:]
-   
-   # Isolate the breasts; this will have to be changed with orientation
-   fgt_thresh_crop_r = fgt_thresh[:dft_cntr[1],:dft_cntr[0]]
-   fgt_thresh_crop_l = fgt_thresh[:dft_cntr[1],dft_cntr[0]:]
-   
-   mask_crop_r = maskarray[:dft_cntr[1],:dft_cntr[0]]
-   mask_crop_l = maskarray[:dft_cntr[1],dft_cntr[0]:]
-   
-   # Find the proportions of fibroglandular tissue
-   segmented = mask_crop > 0
-   segmented = segmented.astype(int)
-   segmented_sum = segmented.sum()
-   
-   fat = fgt_thresh_crop > 0
-   fat = fat.astype(int)
-   fat_sum = fat.sum()
-   
-   # Perform calculations for each breast
-   segmented_l = mask_crop_l > 0
-   segmented_l = segmented_l.astype(int)
-   segmented_l_sum = segmented_l.sum()
-   
-   fat_l = fgt_thresh_crop_l > 0
-   fat_l = fat_l.astype(int)
-   fat_l_sum = fat_l.sum()
-   
-   segmented_r = mask_crop_r > 0
-   segmented_r = segmented_r.astype(int)
-   segmented_r_sum = segmented_r.sum()
-   
-   fat_r = fgt_thresh_crop_r > 0
-   fat_r = fat_r.astype(int)
-   fat_r_sum = fat_r.sum()
-   
-   # Total tissue measured minus fat tissue over the total tissue = fibroglandular percent
-   tfgt = (segmented_sum - fat_sum)*100//segmented_sum
-   lfgt = (segmented_l_sum - fat_l_sum)*100//segmented_l_sum
-   rfgt = (segmented_r_sum - fat_r_sum)*100//segmented_r_sum
-   print "Percentage Fibrogalandular Tissue: ", tfgt
-   print "Percentage Left Fibrogalandular Tissue: ", lfgt
-   print "Percentage Right Fibrogalandular Tissue: ", rfgt
-   
-   # Plot a 4x4
-   pil_imarray = Image.fromarray(imarray)
-   pil_thresh = Image.fromarray(thresh)
-   copyarr = fgt_thresh_crop_l.copy() # need to copy array b/c of some obscure ubuntu/PIL issue: http://stackoverflow.com/questions/10854903/what-is-causing-dimension-dependent-attributeerror-in-pil-fromarray-function
-   pil_fgt_thresh_l = Image.fromarray(copyarr)
-   copyarr = fgt_thresh_crop_r.copy() # see above
-   pil_fgt_thresh_r = Image.fromarray(copyarr)
-   pil_otsu = Image.fromarray(fgt_thresh)
-   copyarr = mask_crop_l.copy() # see above
-   pil_segmented_l = Image.fromarray(copyarr)
-   copyarr = mask_crop_l.copy() # see above
-   pil_segmented_r = Image.fromarray(copyarr)
-   pil_markup = Image.fromarray(contoursarray)
-   
-   # Paste Results
-   pil_backdrop = Image.new('RGB', (587,587), "white")
-   pil_backdrop.paste(pil_imarray.resize((256,256),Image.ANTIALIAS),(25,25))
-   pil_backdrop.paste(pil_markup.resize((256,256),Image.ANTIALIAS),(306,25))
-   
-   w, h = pil_fgt_thresh_r.size
-   W = 256*w//h
-   pil_backdrop.paste(pil_fgt_thresh_r.resize((W,256),Image.ANTIALIAS),(25,306))
-   
-   w, h = pil_fgt_thresh_l.size
-   W = 256*w//h
-   pil_backdrop.paste(pil_fgt_thresh_l.resize((W,256),Image.ANTIALIAS),(306,306))
-   
-   # Add Text
-   font = ImageFont.truetype(FONT_PATH+"Arial Black.ttf",14)
-   draw = ImageDraw.Draw(pil_backdrop)
-   draw.text((25,5),"Original Image",0,font=font)
-   draw.text((306,5),"Breast Contour",0,font=font)
-   draw.text((25,286),"Right Breast FGT: "+str(rfgt)+'%',0,font=font)
-   draw.text((306,286),"Left Breast FGT: "+str(lfgt)+'%',0,font=font)
-   
-   # Save File
-   #sfname = fname.rsplit('/',1)[1].split('.',1)[0]
-   #pil_backdrop.save('./OUT/p'+sfname+'.jpg')
-   
-   imgout = cStringIO.StringIO()
-   pil_backdrop.save(imgout, format='png')
-   k.set_contents_from_string(imgout.getvalue())
-   imgout.close()
-   
-   return segmented_sum, fat_sum, segmented_l_sum, fat_l_sum, segmented_r_sum, fat_r_sum
-
-def processSliceMRI(f,k): # pass the key so we can replace the original image with the processed image for display
-   density = 1
-   volume = 1
-
-   # Read the file into an array
-   array = np.frombuffer(f.getvalue(), dtype='uint16')
-   origimg = cv2.imdecode(array, cv2.CV_LOAD_IMAGE_GRAYSCALE)
-
-   # Chop off the bottom of the image b/c there is often noncontributory artifact; then make numpy arrays
-   img = origimg[:,30:482]
-   imarray = np.array(img)
-   print imarray[250:300,350:400]
-
-   hist_orig, bins_orig = np.histogram(imarray, bins=255, normed=False, range=(10, 255))
-
-   imarraymarkup = imarray
-   maskarray = np.zeros_like(imarray)
-   contoursarray = np.zeros_like(imarray)
-   onesarray = np.ones_like(imarray)
-
-   # Minimum Val Threshold
-   #ret,thresh = cv2.threshold(imarray,np.amin(imarray),255,cv2.THRESH_BINARY)
-
-   # Otsu Threshold
-   '''t = mahotas.otsu(imarray, ignore_zeros = True)
-   otsu_bool_out_1 = imarray > 25
-   otsu_binary_out_1 = otsu_bool_out_1.astype('uint8')
-   thresh = otsu_binary_out_1 * 255'''
-
-   # Absolute Val Threshold
-   ret,thresh = cv2.threshold(imarray,10,255,cv2.THRESH_BINARY) # threshold out the background by arbitrary number
-
-   # Adaptive Threshold
-   #thresh = cv2.adaptiveThreshold(img,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY,11,2)
-
-   # Get the biggest contour found on the image
-   contours, hierarchy = cv2.findContours(thresh,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
-   biggest_contour = []
-   for n, contour in enumerate(contours):
-      if len(contour) > len(biggest_contour):
-         biggest_contour = contour
-         
-   # Fill in the biggest contour
-   cv2.fillPoly(maskarray, pts = [biggest_contour], color=cv.RGB(255,255,255))
-
-   # Use the mask array to crop the original
-   imcrop_orig = cv2.bitwise_and(imarray, maskarray)
-
-   # THRESHOLDING FOR FIBROGLANDULAR SEGMENTATION
-
-   # Adaptive Threshold
-   fgt_thresh = cv2.adaptiveThreshold(imcrop_orig,255,cv2.ADAPTIVE_THRESH_MEAN_C,cv2.THRESH_BINARY,BLKSZ, 0)
-
-   # Draw the biggest contour on an array map
-   cv2.drawContours(contoursarray,biggest_contour,-1,cv.RGB(255,255,255),5)            
-
-   # Calculate R/L sidedness using centroid
-   M = cv2.moments(biggest_contour)
-   cx = int(M['m10']/M['m00'])
-   cy = int(M['m01']/M['m00'])
-   
-   # Plot the center of mass
-   cv2.circle(contoursarray,(cx,cy),10,[255,0,255],-1)            
-
-   # Approximate the breast
-   #epsilon = 0.001*cv2.arcLength(biggest_contour,True)
-   epsilon = 0.02*cv2.arcLength(biggest_contour,True)
-   approx = cv2.approxPolyDP(biggest_contour,epsilon,True)
-
-   # Calculate the hull and convexity defects
-   drawhull = cv2.convexHull(approx)
-   #cv2.drawContours(contoursarray,drawhull,-1,(0,255,0),60)
-   hull = cv2.convexHull(approx, returnPoints = False)
-   defects = cv2.convexityDefects(approx,hull)
-
-   # Find the defect closest to the centroid
-   dft_sdist_c = MAX_DIST # defect short distance from centroid
-   dft_cntr = [] # tuple for center defect
-   
-   if defects is not None:
-      for i in range(defects.shape[0]):
-         s,e,f,d = defects[i,0]
-         far = tuple(approx[f][0])
-         dist = math.hypot(cx - far[0], cy - far[1])
-         if dist < dft_sdist_c: # test for minimum distance from the centroid
-            dft_sdist_c = dist
-            dft_cntr = far
-            cv2.circle(contoursarray,far,10,cv.RGB(255,0,255),-1)
-
-   if dft_cntr:
-      cv2.circle(contoursarray,dft_cntr,20,cv.RGB(255,0,255),-1)
-
-   # Draw thick black contour to eliminate the skin and nipple from the image
-   cv2.drawContours(fgt_thresh,biggest_contour,-1,(0,0,0),5) # 
-   cv2.drawContours(maskarray,biggest_contour,-1,(0,0,0),5) # 
-
-   # Crop the arrays based on segmentation; this may have to change with orientation; just switch the colons to the opposite sides
-   fgt_thresh_crop = fgt_thresh[:dft_cntr[1],:]
-   mask_crop = maskarray[:dft_cntr[1],:]
+    slice3D = np.expand_dims(imarray, axis=2)
     
-   # Isolate the breasts; this will have to be changed with orientation
-   fgt_thresh_crop_r = fgt_thresh[:dft_cntr[1],:dft_cntr[0]]
-   fgt_thresh_crop_l = fgt_thresh[:dft_cntr[1],dft_cntr[0]:]
+    return slice3D
+
+def processMatrix(mtx,dim):
+
+    #-------------------#
+    #       LPF         #
+    #-------------------#
+
+    original = mtx
+
+    # Apply Large Gaussian Filter To Cropped Image
+    #gmtx = ndimage.gaussian_filter(mtx, (2,2,2), order=0)
+    gmtx = mtx
+    gmtx = (gmtx > gmtx.mean())
+    gmtx = gmtx.astype('uint8')
+    gmtx = gmtx * 255
+    print gmtx.shape
+
+    #------------------------#
+    #        DENOISING       #
+    #------------------------#
+    erodim = 4 # erosion dimension
+    cr = 4 # custom radius for the structured 
+
+    if dim == 512:
+        erodim = 4
+        cr = 4
+    elif dim == 712:
+        erodim = 8
+        cr = 6
+
+    gmtx_eroded = ndimage.binary_erosion(gmtx, structure=np.ones((erodim,erodim,1))).astype(gmtx.dtype)
+    #gmtx_eroded = ndimage.binary_erosion(gmtx, structure=myball).astype(gmtx.dtype)
+    gmtx_eroded = gmtx_eroded.astype('uint8')
+    eroded = gmtx_eroded * 255
+
+    #gmtx_eroded = gmtx
+    #eroded = gmtx_eroded
     
-   mask_crop_r = maskarray[:dft_cntr[1],:dft_cntr[0]]
-   mask_crop_l = maskarray[:dft_cntr[1],dft_cntr[0]:]
+    #---------------------#
+    #       SKIMAGE       #
+    #---------------------#
+    markers, nummarks = ndimage.label(gmtx_eroded)
+    flood = markers
+    for zdim in xrange(markers.shape[2]):
+        for col in xrange(markers.shape[1]):
+            first = np.argmax(flood[:,col,zdim] == 1)
+            last = flood.shape[1] - 1 - np.argmax(flood[::-1,col,zdim] == 1)
+            markers[0:first,col,zdim] = 1
+            markers[last:,col,zdim] = 1
 
-   # Find the proportions of fibroglandular tissue
-   segmented = mask_crop > 0
-   segmented = segmented.astype(int)
-   segmented_sum = segmented.sum()
-   
-   fat = fgt_thresh_crop > 0
-   fat = fat.astype(int)
-   fat_sum = fat.sum()
+    #markers = markers.astype('uint8')
+    markers[markers == 1] = 0 # in markers image, 0 is background and 1 is the largest blob (ie chest wall & mediastinum)
+    markers = markers > 0
+    markers = markers.astype('uint8')
 
-   # Perform calculations for each breast
-   segmented_l = mask_crop_l > 0
-   segmented_l = segmented_l.astype(int)
-   segmented_l_sum = segmented_l.sum()
-   
-   fat_l = fgt_thresh_crop_l > 0
-   fat_l = fat_l.astype(int)
-   fat_l_sum = fat_l.sum()
-   
-   segmented_r = mask_crop_r > 0
-   segmented_r = segmented_r.astype(int)
-   segmented_r_sum = segmented_r.sum()
-   
-   fat_r = fgt_thresh_crop_r > 0
-   fat_r = fat_r.astype(int)
-   fat_r_sum = fat_r.sum()
-   
-   # Total tissue measured minus fat tissue over the total tissue = fibroglandular percent
-   print "Percentage Fibrogalandular Tissue: ", (segmented_sum - fat_sum)/segmented_sum
-   print "Percentage Left Fibrogalandular Tissue: ", (segmented_l_sum - fat_l_sum)/segmented_l_sum
-   print "Percentage Right Fibrogalandular Tissue: ", (segmented_r_sum - fat_r_sum)/segmented_r_sum
-    
-   # Plot a 4x4
-   pil_imarray = Image.fromarray(imarray)
-   pil_thresh = Image.fromarray(thresh)
-   copyarr = fgt_thresh_crop_l.copy() # need to copy array b/c of some obscure ubuntu/PIL issue: http://stackoverflow.com/questions/10854903/what-is-causing-dimension-dependent-attributeerror-in-pil-fromarray-function
-   pil_fgt_thresh_l = Image.fromarray(copyarr)
-   copyarr = fgt_thresh_crop_r.copy() # see above
-   pil_fgt_thresh_r = Image.fromarray(copyarr)
-   pil_otsu = Image.fromarray(fgt_thresh)
-   copyarr = mask_crop_l.copy() # see above
-   pil_segmented_l = Image.fromarray(copyarr)
-   copyarr = mask_crop_r.copy() # see above
-   pil_segmented_r = Image.fromarray(copyarr)
-   pil_markup = Image.fromarray(contoursarray)
+    myelem = custom_elem(cr)
+    opened = ndimage.morphology.binary_opening(markers, myelem)
+    opened = opened.astype('uint8')
 
-   plt.figure(figsize=(18,18))
-   plt.subplot(2,2,1),plt.imshow(pil_imarray, 'gray')
-   plt.title('Selected Slice from Original\nMRI T1 Axial Breast MRI',fontsize=20)
-   plt.subplot(2,2,2),plt.imshow(pil_markup, 'gray')
-   plt.title('Breast Contouring',fontsize=20)
-   #plt.subplot(2,2,2),plt.imshow(pil_segmented_r, 'gray')
-   #plt.title('Right Breast Segmented',fontsize=28)
-   #plt.subplot(2,2,2),plt.imshow(pil_segmented_l, 'gray')
-   #plt.title('Left Breast Segmented',fontsize=35)
-   plt.subplot(2,2,3),plt.imshow(pil_fgt_thresh_r, 'gray')
-   plt.title('Right Fibroglandular Segmentation\n13% Calculated Volumetric Density (all slices)',fontsize=20)
-   plt.subplot(2,2,4),plt.imshow(pil_fgt_thresh_l, 'gray')
-   plt.title('Left Fibroglandular Segmentation\n14% Calculated Volumetric Density (all slices)',fontsize=20)
-   plt.tight_layout() # didn't work...
+    markers, nummarks = ndimage.label(opened)
+    opened = opened * 255
 
-   imgout = cStringIO.StringIO()
-   plt.savefig(imgout, format='png') # can't save as a JPG; use PNG and PIL to convert to JPG if necessary
-   k.set_contents_from_string(imgout.getvalue())
-   imgout.close()
-   plt.close('all')   
+    bins = np.bincount(markers.flatten())
 
-   return density, volume
+    print nummarks, bins
+    for i in range(1, nummarks+1):
+        com = ndimage.measurements.center_of_mass(markers == i)
+        print com
+        tmpimg_orig = np.array(original[:,:,int(com[2])])
+        tmpimg_open = np.array(opened[:,:,int(com[2])])
+        cv2.circle(tmpimg_orig,(int(com[1]),int(com[0])),50,[255,255,255],10)            
+        cv2.circle(tmpimg_open,(int(com[1]),int(com[0])),50,[255,255,255],10)            
+        original[:,:,com[2]] = tmpimg_orig
+        opened[:,:,com[2]] = tmpimg_open
 
-def processMammoFile(f, k):
+    return original, eroded, markers, opened
 
-   # New method to read ead the file into an array
-   array = np.frombuffer(f.getvalue(), dtype='uint8') # uint16 works for some reason; 
-   origimg = cv2.imdecode(array, cv2.CV_LOAD_IMAGE_GRAYSCALE)
-      
-   # Chop off the top of the image b/c there is often noncontributory artifact & make numpy arrays
-   img = origimg[25:,:]
-   imarray = np.array(img)
-   
-   imarraymarkup = imarray
-   maskarray = np.zeros_like(imarray)
-   contoursarray = np.zeros_like(imarray)
-   onesarray = np.ones_like(imarray)
-   
-    # Store dimensions for subsequent calculcations
-   max_imheight = maskarray.shape[0]
-   max_imwidth = maskarray.shape[1]
-   
-   if DEBUG: print max_imwidth, max_imheight
-    
-   # Choose the minimum in the entire array as the threshold value b/c some mammograms have > 0 background which screws up the contour finding if based on zero or some arbitrary number
-   ret,thresh = cv2.threshold(imarray,np.amin(imarray),255,cv2.THRESH_BINARY)
-   contours, hierarchy = cv2.findContours(thresh,cv2.RETR_TREE,cv2.CHAIN_APPROX_SIMPLE)
-    
-   biggest_contour = []
-   for n, contour in enumerate(contours):
-      if len(contour) > len(biggest_contour):
-         biggest_contour = contour
+def printMatrix(p1, p2, p3, p4, pfx, nfls):
 
-    # Get the lower most extent of the contour (biggest y-value)
-   max_vals = np.argmax(biggest_contour, axis = 0)
-   min_vals = np.argmin(biggest_contour, axis = 0)
+    BUFF = 40 
 
-   bc_max_y = biggest_contour[max_vals[0,1],0,1] # get the biggest contour max y
-   bc_min_y = biggest_contour[min_vals[0,1],0,1] # get the biggest contour min y
-   
-   cv2.drawContours(contoursarray,biggest_contour,-1,(255,255,0),15)            
+    imgarr = []
+    dataenc = None
 
-   # Calculate R/L sidedness using centroid
-   M = cv2.moments(biggest_contour)
-   cx = int(M['m10']/M['m00'])
-   cy = int(M['m01']/M['m00'])
-   right_side = cx > max_imwidth/2
-    
-    # Plot the center of mass
-   cv2.circle(contoursarray,(cx,cy),100,[255,0,255],-1)            
+    conn = S3Connection(ACCESS_KEY, SECRET_KEY)
+    bkt = conn.get_bucket('chestcad')
+    k = Key(bkt)
 
-    # Approximate the breast
-   epsilon = 0.001*cv2.arcLength(biggest_contour,True)
-   approx = cv2.approxPolyDP(biggest_contour,epsilon,True)
-            
-    # Calculate the hull and convexity defects
-   drawhull = cv2.convexHull(approx)
-   #cv2.drawContours(contoursarray,drawhull,-1,(0,255,0),60)
-   hull = cv2.convexHull(approx, returnPoints = False)
-   defects = cv2.convexityDefects(approx,hull)
-   
-    # Plot the defects and find the most superior. Note: I think the superior and inferior ones have to be kept separate
-    # Also make sure that these are one beyond a reasonable distance from the centroid (arbitrarily cdist_factor = 80%) to make sure that nipple-related defects don't interfere
-   supdef_y = maskarray.shape[0]
-   supdef_tuple = []
-   
-   cdist_factor = 0.80
+    numslices = p1.shape[2]
 
-   if defects is not None:
-      for i in range(defects.shape[0]):
-         s,e,f,d = defects[i,0]
-         far = tuple(approx[f][0])
-         if far[1] < (cy*cdist_factor) and far[1] < supdef_y:
-            supdef_y = far[1]
-            supdef_tuple = far
-            cv2.circle(contoursarray,far,50,[255,0,255],-1)
+    if numslices != nfls:
+       print 'The number of matrix slices (Z-dim) is not equal to the saved number of files.'
 
-   # Find lower defect if there is one
-   # Considering adding if a lower one is at least greater than 1/2 the distance between the centroid and the lower most border of the contour (see IMGS_MLO/IM4010.tif)
-   infdef_y = 0
-   infdef_tuple = []
-   if defects is not None:
-      for i in range(defects.shape[0]):
-         s,e,f,d = defects[i,0]
-         far = tuple(approx[f][0])
-         if far[1] > infdef_y and supdef_tuple: # cy + 3/4*(bc_max_y - cy) = (bc_max_y + cy)/2
-            if (right_side and far[0] > supdef_tuple[0]) or (not right_side and far[0] < supdef_tuple[0]):
-               infdef_y = far[1]
-               infdef_tuple = far
-               cv2.circle(contoursarray,far,50,[255,0,255],-1)
+    for z in xrange(nfls):
 
-    # Try cropping contour beyond certain index; get indices of supdef/infdef tuples, and truncate vector beyond those indices
-   cropped_contour = biggest_contour[:,:,:]
-               
-   if supdef_tuple:
-      sup_idx = [i for i, v in enumerate(biggest_contour[:,0,:]) if v[0] == supdef_tuple[0] and v[1] == supdef_tuple[1]]
-      if sup_idx:
-         if right_side:
-            cropped_contour = cropped_contour[sup_idx[0]:,:,:]
-         else:
-            cropped_contour = cropped_contour[:sup_idx[0],:,:]
-            
-   if infdef_tuple:
-      inf_idx = [i for i, v in enumerate(cropped_contour[:,0,:]) if v[0] == infdef_tuple[0] and v[1] == infdef_tuple[1]]
-      if inf_idx:
-         if right_side:
-            cropped_contour = cropped_contour[:inf_idx[0],:,:]
-         else:
-            cropped_contour = cropped_contour[inf_idx[0]:,:,:]
-         
-   if right_side:
-      cropped_contour = cropped_contour[cropped_contour[:,0,1] != 1]
-   else:
-      cropped_contour = cropped_contour[cropped_contour[:,0,0] != 1]
+       mykey = pfx+'-'+str(nfls)+'-'+str(z)
+       k.key = mykey
 
-    # Fill in the cropped polygon to mask
-   cv2.fillPoly(maskarray, pts = [cropped_contour], color=(255,255,255))
+       # Paste 4x4 Plot
+       '''pil_panel1 = Image.fromarray(p1[:,:,z])
+       pil_panel2 = Image.fromarray(p2[:,:,z])
+       pil_panel3 = Image.fromarray(p3[:,:,z])
+       pil_panel4 = Image.fromarray(p4[:,:,z])
+       
+       pil_panel1 = pil_panel1.convert('RGB')
+       pil_panel2 = pil_panel2.convert('RGB')
+       pil_panel3 = pil_panel3.convert('RGB')
+       pil_panel4 = pil_panel4.convert('RGB')
+       
+       pw, ph = pil_panel1.size
+       pil_backdrop = Image.new('RGB', (pw*2+BUFF*3,ph*2+BUFF*3), "white")
 
-   # Multiply original image to the mask to get the cropped image
-   imarray2 = imarray + onesarray
-   imcrop_orig = cv2.bitwise_and(imarray2, maskarray)
-   
-   # Draw thick black contour to eliminate the skin and nipple from the image
-   cv2.drawContours(imcrop_orig,cropped_contour,-1,(0,0,0),175) # 
-   cv2.drawContours(maskarray,cropped_contour,-1,(0,0,0),175) # 
-
-    # Apply Otsu thresholding to generate a new matrix and convert to int type
-   thresh = mahotas.otsu(imcrop_orig, ignore_zeros = True)
-   otsu_bool_out = imcrop_orig > thresh
-   otsu_binary_out = otsu_bool_out.astype('uint8')
-   otsu_binary_sum = otsu_binary_out.sum()
-   otsu_int_out = otsu_binary_out * 255
-
-   # Crop out the fibroglandular tissue
-   imcrop_fgt = cv2.bitwise_and(imarray2, otsu_int_out) # both arrays are uint8 type
-   pix_min = np.min(imcrop_fgt[np.nonzero(imcrop_fgt)])
-   pix_inc = (255 - pix_min)/4
-   hist, bins = np.histogram(imcrop_fgt, bins=8, normed=False, range=(pix_min,255))
-
-   # Volumetric sum attained by scaling the histogram curve
-   fgt_scaled_sum = hist[0]*0.50 + hist[1]*0.50 + hist[2]*0.75 + hist[3]*0.75 + hist[4] + hist[5] + hist[6] + hist[7]
-
-   # Find area of the segmented breast
-   segmented = maskarray > 0
-   segmented = segmented.astype(int)
-   segmented_sum = segmented.sum()
-
-   # Calculate area & volumetric based densities
-   area_d = (otsu_binary_sum*100/segmented_sum).astype(int)  
-   volumetric_d = (fgt_scaled_sum*100/segmented_sum).astype(int)
-
-   # Determine Area-based BI-RADS Category
-   if area_d < 25:
-      dcat_a = 'Fatty'
-   elif area_d < 50:
-      dcat_a = 'Scattered'
-   elif area_d < 75:
-      dcat_a = 'Heterogenous'
-   else:
-      dcat_a = 'Extremely Dense'
-
-   # Determine Volumetric BI-RADS Category
-   if volumetric_d < 25:
-      dcat_v = 'Fatty'
-   elif volumetric_d < 50:
-      dcat_v = 'Scattered'
-   elif volumetric_d < 75:
-      dcat_v = 'Heterogenous'
-   else:
-      dcat_v = 'Extremely Dense'
-
-   # Determine Sidedness
-   if right_side:
-      side = 'Right'
-   else:
-      side = 'Left'
-
-   # Determine View
-   if bc_min_y > 1:
-      view = 'CC'
-   else:
-      view = 'MLO'
-      
-   # Print results
-   print side, view, otsu_binary_sum, fgt_scaled_sum, segmented_sum, area_d, volumetric_d, dcat_a, dcat_v
-    
-   # Create Histogram Plot
-   width = 0.8 * (bins[1] - bins[0])
-   center = (bins[:-1] + bins[1:]) / 2
-
-   plt.subplot(1,2,1),plt.bar(center, hist, align='center', width=width)
-   plt.title('Area-based Histogram')
-   plt.xlabel("Pixel Value")
-   plt.ylabel("Number of Pixels")
-
-   # Rescale to plot volumetrics
-   hist[0] = hist[0]*0.50
-   hist[1] = hist[1]*0.50
-   hist[2] = hist[2]*0.75
-   hist[3] = hist[3]*0.75
-   plt.subplot(1,2,2),plt.bar(center, hist, align='center', width=width)
-   plt.title('Volumetric-based Histogram')
-   plt.xlabel("Pixel Value")
-
-   # Save plot as Image and close
-   plt.tight_layout()
-   #plt.savefig(fname_hist) # old method of saving to disk
-   histimg = cStringIO.StringIO()
-   plt.savefig(histimg, format='png') # can't save as a JPG; use PNG and PIL to convert to JPG if necessary
-   histimg.seek(0) # apparently this is necessary :)
-   plt.close('all')
-
-   # Create PIL images
-   pil1 = Image.fromarray(imarray2)
-   pil2 = Image.fromarray(contoursarray)
-   pil3 = Image.fromarray(maskarray)
-   pil4 = Image.fromarray(imcrop_fgt)
-   #pil5 = Image.open(fname_hist) # old method
-   pil5 = Image.open(histimg)
-
-   # Pasting images above to a pil background along with text. There's a lot of particular measurements sizing the fonts & pictures so that everything fits.  It's somewhat arbitrary with lots of trial and error, but basically everything is based off the resized width of the first image.  Images needed to be resized down b/c they were too high resolution for canvas.
-   rf = 3 # rf = resize factor
-
-   w1,h1 = pil1.size
-   pil1_sm = pil1.resize((w1//rf,h1//rf))
-   w1_sm,h1_sm = pil1_sm.size
-   print "Resize", int(h1_sm*0.9)
-
-   pil2_sm = pil2.resize((w1_sm,h1_sm))
-   pil3_sm = pil3.resize((w1_sm,h1_sm))
-   pil4_sm = pil4.resize((w1_sm,h1_sm))
-   pil5_sm = pil5.resize((w1_sm*2,int(h1_sm*0.8)))
-
-   pil_backdrop = Image.new('RGB', (100+2*w1_sm,3*h1_sm+3*h1_sm//8), "white")
-
-   pil_backdrop.paste(pil1_sm, (0,h1_sm//8))
-   pil_backdrop.paste(pil2_sm, (100+w1_sm,h1_sm//8))
-   pil_backdrop.paste(pil3_sm, (0,h1_sm//4+h1_sm))
-   pil_backdrop.paste(pil4_sm, (100+w1_sm,h1_sm//4+h1_sm))
-   pil_backdrop.paste(pil5_sm, (0,3*h1_sm//8+2*h1_sm))
-
-   font = ImageFont.truetype(FONT_PATH+"Arial Black.ttf",w1_sm//20)
-
-   draw = ImageDraw.Draw(pil_backdrop)
-   draw.text((0,0),"Original Image",0,font=font)
-   draw.text((100+w1_sm,0),"Fibroglandular Tissue",0,font=font)
-   draw.text((0,h1_sm+h1_sm//6),"Breast Contouring",0,font=font)
-   draw.text((100+w1_sm,h1_sm+h1_sm//6),"Breast Segmentation",0,font=font)
-
-   imgout = cStringIO.StringIO()
-   pil_backdrop.save(imgout, format='png')
-   k.set_contents_from_string(imgout.getvalue())
-   imgout.close()
-   histimg.close()
-
-   print "returning from process file..."
-   print area_d, volumetric_d, dcat_a, dcat_v, side, view
-   return area_d, volumetric_d, dcat_a, dcat_v, side, view
+       pil_backdrop.paste(pil_panel1,(BUFF,BUFF))
+       pil_backdrop.paste(pil_panel2,(pw+BUFF*2,BUFF))
+       pil_backdrop.paste(pil_panel3,(BUFF,BUFF*2+ph))
+       pil_backdrop.paste(pil_panel4,(pw+BUFF*2,BUFF*2+ph))
+       
+       pil_backdrop.save(outdir+pre+str(z)+'.png')'''
+       
+       pil_panel1 = Image.fromarray(p1[:,:,z])
+       pil_panel1 = pil_panel1.convert('RGB')
+       
+       imgout = cStringIO.StringIO()
+       pil_panel1.save(imgout, format='png')
+       k.set_contents_from_string(imgout.getvalue())
+       imgout.close()
+       
+       data = k.get_contents_as_string()
+       #k.delete() # putting the delete here causes premature loss of the image; need to find somewhere else to do it probably performed via outside function when called from javascript
+       dataenc = data.encode("base64")
+       imgarr.append(k.generate_url(3600))
+       
+    return imgarr, dataenc
 
 def get_LUT_value(data, window, level):
     return np.piecewise(data,
