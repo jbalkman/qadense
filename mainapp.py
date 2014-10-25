@@ -233,7 +233,7 @@ def processMRIFile(f, k):
    volume = 1
    
    # Read the file into an array
-   array = np.frombuffer(f.getvalue(), dtype='uint16')
+   array = np.frombuffer(f.getvalue(), dtype='uint8') # or use uint16?
    origimg = cv2.imdecode(array, cv2.CV_LOAD_IMAGE_GRAYSCALE)
    
    # Chop off the bottom of the image b/c there is often noncontributory artifact; then make numpy arrays
