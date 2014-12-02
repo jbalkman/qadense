@@ -64,11 +64,11 @@ $(function () {
 	});
     }
 
-    function getImagesMRI() {
+    function getImagesMRI(b) {
 	
 	$.ajax({
 	    type: "GET",
-	    url: "/process_serve_mri?imgfile="+curr_file,
+	    url: "/process_serve_mri?imgfile="+curr_file+"&bpe="+b,
 	    data: {'message':'message'},
 	    
 	    success:function(resp) {
@@ -101,9 +101,9 @@ $(function () {
 	});
     }
 
-   $("#processButtonMammo").on("click",function(e) {
+    $("#processButtonMammo").on("click",function(e) {
         e.preventDefault();
-
+	
 	if (curr_file.length < 1) {
 	    alert("No mammogram was found. Please drag and drop a mammogram file into the web page drop box.");
 	} else {
@@ -118,16 +118,20 @@ $(function () {
 
     $("#processButtonMRI").on("click",function(e) {
         e.preventDefault();
-
 	if (curr_file.length < 1) {
 	    alert("No mammogram was found. Please drag and drop a mammogram file into the web page drop box.");
 	} else {
+	    var bpe = 0;
+	    
+	    if ($('#bpe').is(":checked")) {
+		bpe = 1;
+	    }
 	    
 	    $('#loading-indicator').show();
 	    $('#dropbox-container').hide();
 	    $('#results-container').hide();
 	    $('#download-container').hide();	    
-	    getImagesMRI();
+	    getImagesMRI(bpe);
 	}
     }); 
 

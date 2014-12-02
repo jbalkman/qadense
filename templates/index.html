@@ -127,22 +127,25 @@
   <div id="download-container">
       <div class="span7 text-center"><h3>Downloadable Test Files (download, then drag and drop into the container below)</h3></div>
       <div class="row">
-	<div class="col-md-3 col-md-offset-3"><h4>Test Patient 1</h4></div>
-	<div class="col-md-3"><h4>Test Patient 2</h4></div>
-      </div>
-      <div class="row">
-	<div class="col-md-3 col-md-offset-3">
-	  <a href="/downloads/MRI_1.zip" class="predownload" title="Patient 1 MRI" id="/downloads/MRIPreview_1.jpg">
-	    <img src="/downloads/MRIPreview_1.jpg" width="100" height="100" alt="gallery thumbnail"/></a>
-	  <a href="/downloads/Mammo_1.zip" class="predownload" title="Patient 1 Mammogram" id="/downloads/MammoPreview_1.jpg">
-	    <img src="/downloads/MammoPreview_1.jpg" width="100" height="100" alt="gallery thumbnail"/></a>
+	<div class="col-md-4 col-md-offset-4">
+	  <a href="/downloads/MAMMO_1.zip" class="predownload" title="Mammogram CC/MLO" id="/downloads/MAMMO_Preview1.jpg">
+	    <img src="/downloads/MAMMO_Preview1.jpg" width="100" height="100" alt="gallery thumbnail"/></a>
+	  <a href="/downloads/MRIBD_1.zip" class="predownload" title="11 Slice Axial T1FS" id="/downloads/MRIBD_Preview1.jpg">
+	    <img src="/downloads/MRIBD_Preview1.jpg" width="100" height="100" alt="gallery thumbnail"/></a>
+	  <a href="/downloads/MRIBPE_1.zip" class="predownload" title="11 Slice Pre+Post Axial T1FS (Total 22 Slices)" id="/downloads/MRIBPE_Preview1.jpg">
+	    <img src="/downloads/MRIBPE_Preview1.jpg" width="100" height="100" alt="gallery thumbnail"/></a>
 	</div>
-	<div class="col-md-3">
+      <div class="row">
+	<div class="col-md-4 col-md-offset-4"><h4>Test Patient</h4></div>
+	<!--<div class="col-md-3"><h4>Test Patient 2</h4></div>-->
+      </div>
+
+	<!--<div class="col-md-3">
 	  <a href="/downloads/MRI_2.zip" class="predownload" title="Patient 2 MRI" id="/downloads/MRIPreview_2.jpg">
 	    <img src="/downloads/MRIPreview_2.jpg" width="100" height="100" alt="gallery thumbnail"/></a>
 	  <a href="/downloads/Mammo_2.zip" class="predownload" title="Patient 2 Mammogram" id="/downloads/MammoPreview_2.jpg">
 	    <img src="/downloads/MammoPreview_2.jpg" width="100" height="100" alt="gallery thumbnail"/></a>
-	</div>
+	</div>-->
       </div>
   </div>
   
@@ -212,6 +215,10 @@
 	  <span class="message">Drop images here to upload.</span>
 	</div>      
 	<p><a class="btn btn-lg btn-primary" id="processButtonMammo" role="button">ANALYZE MAMMOGRAM</a> <a class="btn btn-lg btn-primary" id="processButtonMRI" role="button">ANALYZE MRI</a></p>
+	<form class="form-inline">
+	  <input id="bpe" type="checkbox">
+	  <label class="checkbox inline" for="bpe">Analyze Background Parenchymal Enhancement</label><br>
+	</form>
       </div>
     </div>
   </div>
